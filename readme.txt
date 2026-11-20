@@ -106,6 +106,22 @@ Bug fixes:
   video + alpha mask, 59 frames 640x360      6.2 s      3.2 s (1.9x)   +0.3%
   video in 255 colors, 59 frames 640x360    15.1 s      2.9 s (5.3x)   +3.9%
 
+  Compared to apngasm 3.1.10 (https://github.com/apngasm/apngasm, the C++
+  rewrite, last commit 2021), built with CMake in Release mode on the same
+  machine. 3.x is a port of the same 2.9x algorithm without the 7zip/Zopfli
+  options, and produces exactly the same image data as 2.91 (only the delay
+  encoding and the version text differ). Same frames, 100 ms delay, zlib:
+
+  input                                  3.1.10  2.91-ezgif     ezgif -zl6
+  -------------------------------------  ------  -------------  -------------
+  video, 180 frames 640x360 RGB          61.8 s  42.8 s (1.4x)  22.5 s (2.7x)
+  video + alpha mask, 59 frames 640x360   6.3 s   4.0 s (1.6x)   3.1 s (2.0x)
+  video in 255 colors, 59 frames 640x360 14.3 s  10.4 s (1.4x)   2.8 s (5.1x)
+  GIF animation, 31 frames 320x240       0.13 s  0.11 s (1.2x)  0.08 s (1.6x)
+
+  File sizes: 2.91-ezgif (default -zl9) output has the same image data as
+  3.1.10; -zl6 output is 0.3-4.7% bigger.
+
 --------------------------------
 
 Usage:
