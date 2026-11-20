@@ -12,6 +12,8 @@ ZLIB_VER=1.3.2
 ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
 PNG_VER=1.6.59
 PNG_SHA256=2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5
+DEFLATE_VER=1.26
+DEFLATE_SHA256=bba03fffc5538576213675ce6968fcff6ce2e67d82e4d5febea2d05f9f13cf85
 
 HOST=${HOST:-x86_64-w64-mingw32}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,6 +33,8 @@ fetch "https://github.com/madler/zlib/releases/download/v$ZLIB_VER/zlib-$ZLIB_VE
       "zlib-$ZLIB_VER.tar.gz" "$ZLIB_SHA256"
 fetch "https://github.com/pnggroup/libpng/archive/refs/tags/v$PNG_VER.tar.gz" \
       "libpng-$PNG_VER.tar.gz" "$PNG_SHA256"
+fetch "https://github.com/ebiggers/libdeflate/archive/refs/tags/v$DEFLATE_VER.tar.gz" \
+      "libdeflate-$DEFLATE_VER.tar.gz" "$DEFLATE_SHA256"
 
 # zlib
 rm -rf "zlib-$ZLIB_VER" && tar xzf "zlib-$ZLIB_VER.tar.gz"
@@ -51,13 +55,25 @@ cmake -S "libpng-$PNG_VER" -B png-build \
 cmake --build png-build -j"$JOBS"
 cmake --install png-build
 
+# libdeflate
+rm -rf "libdeflate-$DEFLATE_VER" deflate-build && tar xzf "libdeflate-$DEFLATE_VER.tar.gz"
+cmake -S "libdeflate-$DEFLATE_VER" -B deflate-build \
+  -DCMAKE_SYSTEM_NAME=Windows \
+  -DCMAKE_C_COMPILER="$HOST-gcc" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$DEPS" \
+  -DLIBDEFLATE_BUILD_SHARED_LIB=OFF -DLIBDEFLATE_BUILD_STATIC_LIB=ON \
+  -DLIBDEFLATE_BUILD_GZIP=OFF -DLIBDEFLATE_BUILD_TESTS=OFF
+cmake --build deflate-build -j"$JOBS"
+cmake --install deflate-build
+
 # apngasm (built in a copy so it doesn't mix with a native build's obj/)
 rm -rf src && mkdir src
 cp -r "$ROOT"/*.cpp "$ROOT"/*.h "$ROOT"/Makefile "$ROOT"/7z "$ROOT"/zopfli src/
 make -C src -j"$JOBS" \
   PACKAGE=apngasm.exe CC="$HOST-gcc" \
-  CFLAGS="-Wall -DFEATURE_7ZIP -DFEATURE_ZOPFLI -I$DEPS/include" \
-  LIBS="-static -L$DEPS/lib -lstdc++ -lpng16 -lz -lm"
+  CFLAGS="-Wall -DFEATURE_7ZIP -DFEATURE_ZOPFLI -DFEATURE_LIBDEFLATE -I$DEPS/include" \
+  LIBS="-static -L$DEPS/lib -lstdc++ -lpng16 -lz -ldeflate -lm"
 cp src/apngasm.exe "$WORK/apngasm.exe"
 "$HOST-strip" "$WORK/apngasm.exe"
 echo "Built $WORK/apngasm.exe"

@@ -26,13 +26,13 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential libpng-dev zlib1g-dev file ca-certificates git
+          apt-get install -y --no-install-recommends build-essential libpng-dev zlib1g-dev libdeflate-dev file ca-certificates git
 
       - uses: actions/checkout@v4
 
       - name: Build static binary
         run: |
-          make -j"$(nproc)" LIBS="-static -lstdc++ -lpng -lz -lm"
+          make -j"$(nproc)" LIBS="-static -lstdc++ -lpng -lz -ldeflate -lm"
           file apngasm
           # apngasm without arguments prints its version + usage and exits 1
           ./apngasm > usage.txt || true

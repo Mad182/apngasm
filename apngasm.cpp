@@ -44,6 +44,9 @@
 #ifdef FEATURE_ZOPFLI
 #include "zopfli.h"
 #endif
+#ifdef FEATURE_LIBDEFLATE
+#include "libdeflate.h"
+#endif
 
 typedef struct {
   Image *image;
@@ -63,8 +66,11 @@ int op_z1_active;
 int op_z2_active;
 #define OP_SIZE_LOST 0xFFFFFFFFu
 
-/* zlib level of the final compression pass with -z0 (upstream used 9) */
-int zlib_level = Z_BEST_COMPRESSION;
+/* compression level for -z0 (1-9, default 9) and -z3 (1-12, default 12) */
+int zlib_level = -1;
+#ifdef FEATURE_LIBDEFLATE
+struct libdeflate_compressor *ld_compressor = NULL;
+#endif
 
 unsigned int next_seq_num;
 unsigned char *row_buf;
@@ -282,6 +288,18 @@ void deflate_rect_fin(int deflate_method, int iter, unsigned char *zbuf,
   } else
     process_rect(image, xbytes, rowbytes, y, h, bpp, dest);
 
+#ifdef FEATURE_LIBDEFLATE
+  if (deflate_method == 3 && ld_compressor != NULL) {
+    size_t size = libdeflate_zlib_compress(ld_compressor, dest,
+                                           (size_t)h * (rowbytes + 1), zbuf,
+                                           (size_t)zbuf_size);
+    if (size > 0) {
+      *zsize = (unsigned int)size;
+      return;
+    }
+    /* didn't fit - fall through to zlib */
+  }
+#endif
 #ifdef FEATURE_ZOPFLI
   if (deflate_method == 2) {
     ZopfliOptions opt_zopfli;
@@ -321,7 +339,7 @@ void deflate_rect_fin(int deflate_method, int iter, unsigned char *zbuf,
     fin_zstream.zalloc = Z_NULL;
     fin_zstream.zfree = Z_NULL;
     fin_zstream.opaque = Z_NULL;
-    deflateInit2(&fin_zstream, zlib_level, 8, 15, 8,
+    deflateInit2(&fin_zstream, zlib_level > 9 ? 9 : zlib_level, 8, 15, 8,
                  op[n].filters ? Z_FILTERED : Z_DEFAULT_STRATEGY);
 
     fin_zstream.next_out = zbuf;
@@ -876,6 +894,10 @@ int save_apng(char *szOut, std::vector<Image> &img, unsigned int loops,
   op_zstream2.zfree = Z_NULL;
   op_zstream2.opaque = Z_NULL;
   deflateInit2(&op_zstream2, Z_BEST_SPEED + 1, 8, 15, 8, Z_FILTERED);
+#ifdef FEATURE_LIBDEFLATE
+  if (deflate_method == 3)
+    ld_compressor = libdeflate_alloc_compressor(zlib_level);
+#endif
 
   unsigned int idat_size = (rowbytes + 1) * height;
   unsigned int zbuf_size =
@@ -1036,6 +1058,12 @@ int save_apng(char *szOut, std::vector<Image> &img, unsigned int loops,
 
   deflateEnd(&op_zstream1);
   deflateEnd(&op_zstream2);
+#ifdef FEATURE_LIBDEFLATE
+  if (ld_compressor != NULL) {
+    libdeflate_free_compressor(ld_compressor);
+    ld_compressor = NULL;
+  }
+#endif
 
   temp.free();
   over1.free();
@@ -1217,8 +1245,8 @@ int main(int argc, char **argv) {
            "--fuzz N: lossy inter-frame optimization, merge pixels that differ by "
            "up to N%% (0-100)\n"
            "-z0     : zlib compression\n"
-           "-zl#    : zlib level for -z0, 1-9 (default -zl9; -zl6 is much "
-           "faster)\n");
+           "-zl#    : compression level for -z0 (1-9, default 9) or -z3 "
+           "(1-12, default 12)\n");
 #ifdef FEATURE_7ZIP
     printf("-z1     : 7zip compression%s\n",
            (deflate_method == 1) ? " (default)" : "");
@@ -1226,6 +1254,10 @@ int main(int argc, char **argv) {
 #ifdef FEATURE_ZOPFLI
     printf("-z2     : Zopfli compression%s\n",
            (deflate_method == 2) ? " (default)" : "");
+#endif
+#ifdef FEATURE_LIBDEFLATE
+    printf("-z3     : libdeflate compression%s\n",
+           (deflate_method == 3) ? " (default)" : "");
 #endif
     if (deflate_method)
       printf("-i##    : number of iterations (default -i%d)\n", iter);
@@ -1255,8 +1287,8 @@ int main(int argc, char **argv) {
       zlib_level = atoi(arg + 3);
       if (zlib_level < 1)
         zlib_level = 1;
-      if (zlib_level > 9)
-        zlib_level = 9;
+      if (zlib_level > 12)
+        zlib_level = 12;
     } else if (strncmp(arg, "-z", 2) == 0 || strncmp(arg, "-Z", 2) == 0) {
       deflate_method = atoi(arg + 2);
     } else if (strncmp(arg, "-i", 2) == 0 || strncmp(arg, "-I", 2) == 0) {
@@ -1330,12 +1362,28 @@ int main(int argc, char **argv) {
   if (delay_den <= 0)
     delay_den = 10;
 
+  if (deflate_method == 3) {
+    if (zlib_level < 1)
+      zlib_level = 12;
+    if (zlib_level > 12)
+      zlib_level = 12;
+  } else {
+    if (zlib_level < 1)
+      zlib_level = Z_BEST_COMPRESSION;
+    if (zlib_level > 9)
+      zlib_level = 9;
+  }
+
   if (deflate_method == 0)
     printf(" using ZLIB level %d\n\n", zlib_level);
   else if (deflate_method == 1)
     printf(" using 7ZIP with %d iterations\n\n", iter);
   else if (deflate_method == 2)
     printf(" using ZOPFLI with %d iterations\n\n", iter);
+#ifdef FEATURE_LIBDEFLATE
+  else if (deflate_method == 3)
+    printf(" using LIBDEFLATE level %d\n\n", zlib_level);
+#endif
 
   unsigned char coltype = 6;
 

@@ -51,9 +51,12 @@ New options:
                  previous frame by up to N% (0-100) are replaced with the
                  previous value, so they become transparent/unchanged in the
                  frame difference and compress much better
-- -zl#         : zlib level for the final -z0 pass, 1-9. The default -zl9 is
-                 the same as 2.91; -zl6 is 1.3-3.7x faster with output only
-                 0.3-4% bigger
+- -z3          : libdeflate compression (levels 1-12 via -zl#, default 12).
+                 Much faster than 7zip at similar or smaller file sizes, and
+                 faster/smaller than zlib-9.
+- -zl#         : compression level for -z0 (1-9, default 9) or -z3 (1-12,
+                 default 12). With -z0, -zl6 is 1.3-3.7x faster than -zl9
+                 with output only 0.3-4% bigger.
 
 Bug fixes:
 - Input frames of different sizes (multiple files) caused out-of-bounds
@@ -77,6 +80,8 @@ Bug fixes:
 - Buffer overflow with input file names longer than 255 characters, and a
   '%' in the input file name was interpreted as a printf format.
 - Dangling pointers after Image::free().
+- Updated bundled Zopfli to latest upstream (fixes GCC allocation-size
+  warning) and removed unused LZMA/decoder files from 7z/.
 
 --------------------------------
 
@@ -125,6 +130,29 @@ Bug fixes:
   File sizes: 2.91-ezgif (default -zl9) output has the same image data as
   3.1.10; -zl6 output is 0.3-4.7% bigger.
 
+  libdeflate (-z3) vs zlib (-z0) vs 7zip (-z1) on 2.91-ezgif (libdeflate 1.23):
+
+  input                         method           time       size
+  ----------------------------  --------------  ------  ------------
+  video, 180f 640x360 RGB       -z0 -zl6        23.5 s   76,156,378
+                                -z0 -zl9        43.3 s   75,637,137
+                                -z3 -zl9        22.0 s   76,102,941
+                                -z3 -zl12       32.2 s   73,769,814 (-2.5% vs zl9)
+  video + alpha, 59f 640x360    -z0 -zl6         3.3 s   12,909,722
+                                -z0 -zl9         3.9 s   12,870,625
+                                -z3 -zl6         2.0 s   13,174,387
+                                -z3 -zl12        6.6 s   12,486,807 (-0.5% vs 7z)
+                                -z1 (7zip)      19.0 s   12,554,853
+  video 255-col, 59f 640x360    -z0 -zl6         2.9 s    4,630,505
+                                -z0 -zl9        10.6 s    4,457,034
+                                -z3 -zl6         2.3 s    4,578,857
+                                -z3 -zl12        6.2 s    4,230,990 (2.7x faster vs 7z)
+                                -z1 (7zip)      16.9 s    4,222,069
+  GIF anim, 31f 320x240         -z0 -zl9        0.12 s       38,716
+                                -z3 -zl9        0.09 s       37,423
+                                -z3 -zl12       0.30 s       34,390 (2.8x faster vs 7z)
+                                -z1 (7zip)      0.85 s       34,504
+
 --------------------------------
 
 Usage:
@@ -146,9 +174,10 @@ file ## : (multiple input files) delay of that frame in ms
 -kc     : keep color type
 --fuzz N: lossy inter-frame optimization, merge pixels that differ by up to N%
 -z0     : zlib compression
--zl#    : zlib level for -z0, 1-9 (default -zl9; -zl6 is much faster)
+-zl#    : compression level for -z0 (1-9, default 9) or -z3 (1-12, default 12)
 -z1     : 7zip compression (default)
 -z2     : Zopfli compression
+-z3     : libdeflate compression
 -i##    : number of iterations (default -i15)
 
 Options must start with '-' (the '/' prefix of the Windows version is not
@@ -164,7 +193,7 @@ on Ubuntu and other Debian based distributions.
 1. Install the compiler and the libpng/zlib development packages:
 
    sudo apt update
-   sudo apt install build-essential git libpng-dev zlib1g-dev
+   sudo apt install build-essential git libpng-dev zlib1g-dev libdeflate-dev
 
    (build-essential provides gcc, g++ and make; the 7zip and Zopfli
    compressors are included in the source tree, nothing else is needed)
@@ -204,7 +233,7 @@ To build it yourself, cross-compile on Debian/Ubuntu with MinGW-w64:
    sudo apt install mingw-w64 cmake make curl ca-certificates
    sh scripts/build-windows.sh
 
-The script downloads current zlib and libpng sources (versions and SHA-256
+The script downloads current zlib, libpng and libdeflate sources (versions and SHA-256
 checksums pinned in the script), builds them as static libraries and
 produces build-windows/apngasm.exe, a single executable without DLL
 dependencies.
@@ -217,7 +246,9 @@ Build options:
   then only run on CPUs with the same instruction set as the build
   machine, so don't use it for binaries you copy to other servers.
 - Fully static Linux binary (as in the releases):
-  make LIBS="-static -lstdc++ -lpng -lz -lm"
+  make LIBS="-static -lstdc++ -lpng -lz -ldeflate -lm"
+- Building without libdeflate:
+  make CFLAGS="-Wall -pedantic -DFEATURE_7ZIP -DFEATURE_ZOPFLI" LIBS="-lstdc++ -lpng -lz -lm"
 
 ================================================================
 
