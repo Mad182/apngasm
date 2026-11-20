@@ -4,8 +4,7 @@
 #   sudo apt install mingw-w64 cmake make curl ca-certificates
 #   sh scripts/build-windows.sh
 #
-# Downloads and builds current zlib and libpng (the copies in zlib/ and
-# libpng/ are from 2016 and are not used). Result: build-windows/apngasm.exe,
+# Downloads and builds current zlib and libpng. Result: build-windows/apngasm.exe,
 # a single self-contained executable (no DLLs needed).
 set -eu
 

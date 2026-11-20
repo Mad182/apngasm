@@ -207,8 +207,7 @@ To build it yourself, cross-compile on Debian/Ubuntu with MinGW-w64:
 The script downloads current zlib and libpng sources (versions and SHA-256
 checksums pinned in the script), builds them as static libraries and
 produces build-windows/apngasm.exe, a single executable without DLL
-dependencies. The old Visual Studio projects in projects/ are from the
-original 2.91 and have not been updated.
+dependencies.
 
 Build options:
 - "make clean" removes the binary and object files.
@@ -217,9 +216,6 @@ Build options:
   "-march=native" may make it slightly faster, but the binary will
   then only run on CPUs with the same instruction set as the build
   machine, so don't use it for binaries you copy to other servers.
-- The libpng/ and zlib/ directories (2016 versions) are only used by the
-  original Visual Studio project files; the Linux build links the system
-  libpng and zlib, and scripts/build-windows.sh downloads current ones.
 - Fully static Linux binary (as in the releases):
   make LIBS="-static -lstdc++ -lpng -lz -lm"
 
