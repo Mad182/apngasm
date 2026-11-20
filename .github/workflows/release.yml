@@ -1,0 +1,122 @@
+name: Release
+
+# Pushing a tag like "v2.91-ezgif" builds the Linux and Windows binaries and
+# publishes them as a GitHub release. Can also be started manually from the
+# Actions tab: then it only builds the binaries as workflow artifacts.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    # Debian 12: same environment as the documented build instructions
+    container: debian:12
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential libpng-dev zlib1g-dev file ca-certificates git
+
+      - uses: actions/checkout@v4
+
+      - name: Build static binary
+        run: |
+          make -j"$(nproc)" LIBS="-static -lstdc++ -lpng -lz -lm"
+          file apngasm
+          # apngasm without arguments prints its version + usage and exits 1
+          ./apngasm > usage.txt || true
+          cat usage.txt
+          grep -q "APNG Assembler 2.91-ezgif" usage.txt
+
+      - name: Package
+        run: |
+          case "$GITHUB_REF_NAME" in v*) VER="${GITHUB_REF_NAME#v}" ;; *) VER="${GITHUB_SHA::7}" ;; esac
+          NAME="apngasm-$VER-linux-x86_64"
+          mkdir "$NAME"
+          cp apngasm readme.txt "$NAME/"
+          tar czf "$NAME.tar.gz" "$NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: apngasm-*-linux-x86_64.tar.gz
+
+  windows-x64:
+    runs-on: ubuntu-latest
+    # cross-compiled with MinGW-w64, see scripts/build-windows.sh
+    container: debian:12
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends mingw-w64 cmake make curl ca-certificates file git zip
+
+      - uses: actions/checkout@v4
+
+      - name: Build apngasm.exe
+        run: |
+          sh scripts/build-windows.sh
+          file build-windows/apngasm.exe
+
+      - name: Package
+        run: |
+          case "$GITHUB_REF_NAME" in v*) VER="${GITHUB_REF_NAME#v}" ;; *) VER="${GITHUB_SHA::7}" ;; esac
+          NAME="apngasm-$VER-windows-x64"
+          mkdir "$NAME"
+          cp build-windows/apngasm.exe "$NAME/"
+          cp readme.txt "$NAME/readme.txt"
+          zip -r "$NAME.zip" "$NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: apngasm-*-windows-x64.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-x86_64, windows-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Checksums
+        run: sha256sum apngasm-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: APNG Assembler ${{ github.ref_name }}
+          files: |
+            apngasm-*
+            SHA256SUMS.txt
+          body: |
+            APNG Assembler 2.91-ezgif: faster fork of APNG Assembler 2.91 with bug fixes.
+            Output is identical to 2.91 (default settings) while being 1.2-1.6x faster,
+            or up to 5x faster with `-zl6`. See readme.txt for all changes and benchmarks.
+
+            **Linux x86_64** (`apngasm-*-linux-x86_64.tar.gz`): statically linked,
+            runs on any x86_64 Linux distribution without extra libraries.
+            ```
+            tar xzf apngasm-*-linux-x86_64.tar.gz
+            sudo install -m 755 apngasm-*-linux-x86_64/apngasm /usr/local/bin/
+            ```
+
+            **Windows x64** (`apngasm-*-windows-x64.zip`): single `apngasm.exe`, no DLLs
+            needed. Command line tool, run it from cmd or PowerShell:
+            ```
+            apngasm.exe output.png frame001.png
+            ```
+
+            Other platforms: build from source, see readme.txt.
