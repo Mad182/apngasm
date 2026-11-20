@@ -8,7 +8,7 @@
  * maxst at users.sourceforge.net
  *
  * Modified 2026 by Madars (ezgif.com): performance improvements and bug
- * fixes, see readme.txt. This is an altered version of the original.
+ * fixes, see README.md. This is an altered version of the original.
  *
  * zlib license
  * ------------

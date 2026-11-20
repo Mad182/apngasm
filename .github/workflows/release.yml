@@ -44,7 +44,7 @@ jobs:
           case "$GITHUB_REF_NAME" in v*) VER="${GITHUB_REF_NAME#v}" ;; *) VER="${GITHUB_SHA::7}" ;; esac
           NAME="apngasm-$VER-linux-x86_64"
           mkdir "$NAME"
-          cp apngasm readme.txt "$NAME/"
+          cp apngasm README.md "$NAME/"
           tar czf "$NAME.tar.gz" "$NAME"
 
       - uses: actions/upload-artifact@v4
@@ -75,7 +75,7 @@ jobs:
           NAME="apngasm-$VER-windows-x64"
           mkdir "$NAME"
           cp build-windows/apngasm.exe "$NAME/"
-          cp readme.txt "$NAME/readme.txt"
+          cp README.md "$NAME/README.md"
           zip -r "$NAME.zip" "$NAME"
 
       - uses: actions/upload-artifact@v4
@@ -102,9 +102,14 @@ jobs:
             apngasm-*
             SHA256SUMS.txt
           body: |
-            APNG Assembler 2.91-ezgif: faster fork of APNG Assembler 2.91 with bug fixes.
-            Output is identical to 2.91 (default settings) while being 1.2-1.6x faster,
-            or up to 5x faster with `-zl6`. See readme.txt for all changes and benchmarks.
+            APNG Assembler 2.91-ezgif: faster fork of APNG Assembler 2.91 with bug fixes and `libdeflate` (`-z3`) support.
+            See [README.md](https://github.com/Mad182/apngasm#readme) for full benchmarks, recommended flags, and changes.
+
+            **Quick recommendations:**
+            - Best speed: `-z3 -zl6` or `-z3 -zl9`
+            - Best speed/size balance: `-z3 -zl12` (2.7–2.9× faster than 7zip at equal or smaller size)
+            - Smallest lossless file: `-z2 -i15` (Zopfli)
+            - Smallest lossy file: `--fuzz 3 -z3 -zl12`
 
             **Linux x86_64** (`apngasm-*-linux-x86_64.tar.gz`): statically linked,
             runs on any x86_64 Linux distribution without extra libraries.
@@ -116,7 +121,7 @@ jobs:
             **Windows x64** (`apngasm-*-windows-x64.zip`): single `apngasm.exe`, no DLLs
             needed. Command line tool, run it from cmd or PowerShell:
             ```
-            apngasm.exe output.png frame001.png
+            apngasm.exe output.png frame001.png -z3 -zl12
             ```
 
-            Other platforms: build from source, see readme.txt.
+            Other platforms: build from source, see README.md.
