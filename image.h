@@ -48,11 +48,17 @@ struct Image
   ~Image() { }
   void init(unsigned int w1, unsigned int h1, unsigned int bpp1, unsigned int type1)
   {
-    w = w1; h = h1; bpp = bpp1; type = type1;
-    int rowbytes = w * bpp;
     delete[] rows; delete[] p;
+    rows = NULL; p = NULL;
+    if (w1 == 0 || h1 == 0 || bpp1 == 0 || w1 > 100000 || h1 > 100000 || (unsigned long long)w1 * h1 * bpp1 > 2000000000ULL)
+    {
+      w = h = bpp = type = 0;
+      return;
+    }
+    w = w1; h = h1; bpp = bpp1; type = type1;
+    size_t rowbytes = (size_t)w * bpp;
     rows = new ROW[h];
-    rows[0] = p = new unsigned char[h * rowbytes];
+    rows[0] = p = new unsigned char[(size_t)h * rowbytes];
     for (unsigned int j=1; j<h; j++)
       rows[j] = rows[j-1] + rowbytes;
   }
@@ -63,7 +69,7 @@ struct Image
     if ((ts = image->ts) != 0) memcpy(&tr[0], &image->tr[0], ts);
   }
   void init(Image * image) { init(image->w, image->h, image); }
-  void free() { delete[] rows; delete[] p; }
+  void free() { delete[] rows; delete[] p; rows = NULL; p = NULL; }
 };
 
 int load_image(char * szName, Image * image);

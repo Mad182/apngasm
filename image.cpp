@@ -3,6 +3,9 @@
  * Copyright (c) 2016 Max Stepin
  * maxst at users.sourceforge.net
  *
+ * Modified 2026 by Madars (ezgif.com): performance improvements and bug
+ * fixes, see readme.txt. This is an altered version of the original.
+ *
  * zlib license
  * ------------
  *
@@ -28,6 +31,39 @@
 #include "image.h"
 #include "png.h"
 #include "zlib.h"
+
+/* Small open-addressing hash: packed color -> palette index. Replaces the
+ * linear search over up to 256 palette entries that was done for every pixel
+ * of every frame during color type reduction. Holds at most 257 entries. */
+struct ColorMap
+{
+  enum { SIZE = 1024, MASK = SIZE - 1 };
+  unsigned int key[SIZE];
+  short val[SIZE];
+  ColorMap() { memset(val, -1, sizeof(val)); }
+  static unsigned int slot(unsigned int k) { return (k * 2654435761u) >> 22; }
+  int find(unsigned int k) const
+  {
+    for (unsigned int s = slot(k); val[s] >= 0; s = (s + 1) & MASK)
+      if (key[s] == k)
+        return val[s];
+    return -1;
+  }
+  void insert(unsigned int k, int v)
+  {
+    unsigned int s = slot(k);
+    while (val[s] >= 0 && key[s] != k)
+      s = (s + 1) & MASK;
+    key[s] = k;
+    val[s] = (short)v;
+  }
+};
+
+static inline unsigned int pack_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a)
+{
+  return (unsigned int)r | ((unsigned int)g << 8) | ((unsigned int)b << 16) | ((unsigned int)a << 24);
+}
+
 
 int load_png(char * szName, Image * image)
 {
@@ -76,12 +112,22 @@ int load_png(char * szName, Image * image)
   unsigned int bpp = png_get_channels(png_ptr, info_ptr);
   unsigned int type = png_get_color_type(png_ptr, info_ptr);
   image->init(w, h, bpp, type);
+  if (!image->p)
+  {
+    /* init() refuses zero/oversized dimensions - bail out instead of letting
+       png_read_image() write through a NULL row table */
+    printf("Error: unsupported image size in '%s'\n", szName);
+    png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+    fclose(f);
+    return 1;
+  }
 
   png_colorp palette;
   png_color_16p trans_color;
   png_bytep trans_alpha;
 
-  if (png_get_PLTE(png_ptr, info_ptr, &palette, &image->ps))
+  /* RGB(A) files may carry a "suggested palette" PLTE; only keep a real one */
+  if (type == PNG_COLOR_TYPE_PALETTE && png_get_PLTE(png_ptr, info_ptr, &palette, &image->ps))
     memcpy(image->pl, palette, image->ps * 3);
 
   if (png_get_tRNS(png_ptr, info_ptr, &trans_alpha, &image->ts, &trans_color) && image->ts > 0)
@@ -136,6 +182,8 @@ int load_tga(char * szName, Image * image)
 
   w = header[12] + header[13]*256;
   h = header[14] + header[15]*256;
+  if (w == 0 || h == 0 || w > 65535 || h > 65535)
+    goto fail;
   compressed = header[2] & 8;
   top_bottom = header[17] & 0x20;
 
@@ -151,6 +199,9 @@ int load_tga(char * szName, Image * image)
   if ((header[2] & 7) == 2 && header[16] == 32)
     image->init(w, h, 4, 6);
   else
+    goto fail;
+
+  if (!image->p)
     goto fail;
 
   if (header[0] != 0)
@@ -205,6 +256,8 @@ int load_tga(char * szName, Image * image)
         if (fread(&c, 1, 1, f) != 1)
           goto fail;
         n = (c & 0x7F)+1;
+        if (i + n > w)
+          goto fail;
 
         if ((c & 0x80) != 0)
         {
@@ -440,8 +493,9 @@ void up0to4(Image * image)
     dp = image->rows[y];
     for (x=0; x<image->w; x++)
     {
-      *dp++ = *sp++;
-      *dp++ = 255;
+      unsigned char g = *sp++;
+      *dp++ = g;
+      *dp++ = (image->ts > 0 && image->tr[1] == g) ? 0 : 255;
     }
   }
   delete[] image->p;
@@ -471,6 +525,14 @@ void up0to2(Image * image)
   }
   delete[] image->p;
   image->p = dst;
+
+  /* gray tRNS (2 bytes) -> RGB tRNS (6 bytes) */
+  if (image->ts > 0)
+  {
+    image->tr[0] = image->tr[2] = image->tr[4] = 0;
+    image->tr[3] = image->tr[5] = image->tr[1];
+    image->ts = 6;
+  }
 }
 
 void optim_upconvert(Image * image, unsigned char coltype)
@@ -492,6 +554,14 @@ void optim_upconvert(Image * image, unsigned char coltype)
   else
   if (image->type == 0 && coltype == 2)
     up0to2(image);
+
+  /* transparency is now in the alpha channel; drop stale PLTE/tRNS data so
+     they don't end up as (invalid) chunks in a gray+alpha / RGBA file */
+  if (image->type == 4 || image->type == 6)
+  {
+    image->ps = 0;
+    image->ts = 0;
+  }
 }
 
 void optim_dirty_transp(Image * image)
@@ -526,7 +596,7 @@ void optim_dirty_transp(Image * image)
 
 int different(Image * image1, Image * image2)
 {
-  return memcmp(image1->p, image2->p, image1->w * image1->h * image1->bpp);
+  return memcmp(image1->p, image2->p, (size_t)image1->w * image1->h * image1->bpp);
 }
 
 void optim_duplicates(std::vector<Image>& img, unsigned int first)
@@ -549,23 +619,81 @@ void optim_duplicates(std::vector<Image>& img, unsigned int first)
       img[i].delay_num += num;
     else
     {
-      img[i].delay_num = num = num*img[i].delay_den + den*img[i].delay_num;
-      img[i].delay_den = den = den*img[i].delay_den;
-      while (num && den)
+      /* 64-bit: num*den products of 16-bit-ish values overflow 32 bits */
+      unsigned long long n = (unsigned long long)num*img[i].delay_den + (unsigned long long)den*img[i].delay_num;
+      unsigned long long d = (unsigned long long)den*img[i].delay_den;
+      unsigned long long a = n, b = d;
+      while (b)
       {
-        if (num > den)
-          num = num % den;
-        else
-          den = den % num;
+        unsigned long long t = a % b;
+        a = b;
+        b = t;
       }
-      num += den;
-      img[i].delay_num /= num;
-      img[i].delay_den /= num;
+      if (a == 0)
+        a = 1;
+      n /= a;
+      d /= a;
+      /* keep it representable; save_apng() scales it to 16 bits */
+      while (n > 0xFFFFFFFFull || d > 0xFFFFFFFFull)
+      {
+        n = (n + 1) / 2;
+        d = (d + 1) / 2;
+      }
+      img[i].delay_num = (unsigned int)n;
+      img[i].delay_den = d ? (unsigned int)d : 1;
     }
   }
 }
 
 typedef struct { unsigned int num; unsigned char r, g, b, a; } COLORS;
+
+/* Count a color in col[]/colors with the same result as the original linear
+ * search: stop tracking once more than 256 distinct colors were seen.
+ * last_key/last_idx cache the previous pixel (runs of equal pixels are the
+ * common case). */
+static inline void count_color(ColorMap & map, COLORS * col, unsigned int & colors,
+                               unsigned int & last_key, int & last_idx,
+                               unsigned char r, unsigned char g, unsigned char b, unsigned char a)
+{
+  if (colors > 256)
+    return;
+  unsigned int key = pack_rgba(r, g, b, a);
+  int k = (last_idx >= 0 && key == last_key) ? last_idx : map.find(key);
+  if (k >= 0)
+  {
+    col[k].num++;
+    last_key = key;
+    last_idx = k;
+    return;
+  }
+  if (colors < 256)
+  {
+    col[colors].num++;
+    col[colors].r = r;
+    col[colors].g = g;
+    col[colors].b = b;
+    col[colors].a = a;
+    map.insert(key, colors);
+    last_key = key;
+    last_idx = colors;
+  }
+  colors++;
+}
+
+/* index of each (sorted) palette entry, for the pixel remapping pass */
+static void build_index_map(ColorMap & map, COLORS * col, unsigned int colors)
+{
+  /* insert in reverse so the first matching entry wins, like the linear search */
+  for (int k = (int)colors - 1; k >= 0; k--)
+    map.insert(pack_rgba(col[k].r, col[k].g, col[k].b, col[k].a), k);
+}
+
+static inline unsigned char lookup_index(const ColorMap & map, unsigned int colors,
+                                         unsigned char r, unsigned char g, unsigned char b, unsigned char a)
+{
+  int k = map.find(pack_rgba(r, g, b, a));
+  return (unsigned char)(k >= 0 ? k : colors);
+}
 
 int cmp_colors(const void *arg1, const void *arg2)
 {
@@ -586,7 +714,7 @@ int cmp_colors(const void *arg1, const void *arg2)
 
 void down6(std::vector<Image>& img)
 {
-  unsigned int i, k, x, y;
+  unsigned int i, x, y;
   unsigned char * sp;
   unsigned char * dp;
   unsigned char r, g, b, a;
@@ -597,6 +725,9 @@ void down6(std::vector<Image>& img)
   unsigned char gray[256];
   COLORS col[256];
   unsigned int colors = 0;
+  ColorMap cmap;
+  unsigned int last_key = 0;
+  int last_idx = -1;
   Image * image = &img[0];
 
   memset(&cube, 0, sizeof(cube));
@@ -637,29 +768,7 @@ void down6(std::vector<Image>& img)
         else
           full_transp = 1;
 
-        if (colors <= 256)
-        {
-          int found = 0;
-          for (k=0; k<colors; k++)
-          if (col[k].r == r && col[k].g == g && col[k].b == b && col[k].a == a)
-          {
-            found = 1;
-            col[k].num++;
-            break;
-          }
-          if (found == 0)
-          {
-            if (colors < 256)
-            {
-              col[colors].num++;
-              col[colors].r = r;
-              col[colors].g = g;
-              col[colors].b = b;
-              col[colors].a = a;
-            }
-            colors++;
-          }
-        }
+        count_color(cmap, col, colors, last_key, last_idx, r, g, b, a);
       }
     }
   }
@@ -702,6 +811,8 @@ void down6(std::vector<Image>& img)
         col[colors++].a = 0;
 
       qsort(&col[0], colors, sizeof(COLORS), cmp_colors);
+      ColorMap imap;
+      build_index_map(imap, col, colors);
 
       for (i=0; i<img.size(); i++)
       {
@@ -714,15 +825,13 @@ void down6(std::vector<Image>& img)
             g = *sp++;
             b = *sp++;
             a = *sp++;
-            for (k=0; k<colors; k++)
-              if (col[k].r == r && col[k].g == g && col[k].b == b && col[k].a == a)
-                break;
-            *dp++ = k;
+            *dp++ = lookup_index(imap, colors, r, g, b, a);
           }
         }
       }
 
       image->ps = colors;
+      image->ts = 0; /* recomputed below; drop any stale RGB tRNS length */
       for (i=0; i<colors; i++)
       {
         image->pl[i].r = col[i].r;
@@ -803,7 +912,7 @@ void down6(std::vector<Image>& img)
 
 void down2(std::vector<Image>& img)
 {
-  unsigned int i, k, x, y;
+  unsigned int i, x, y;
   unsigned char * sp;
   unsigned char * dp;
   unsigned char r, g, b, a;
@@ -812,6 +921,9 @@ void down2(std::vector<Image>& img)
   unsigned char gray[256];
   COLORS col[256];
   unsigned int colors = 0;
+  ColorMap cmap;
+  unsigned int last_key = 0;
+  int last_idx = -1;
   Image * image = &img[0];
 
   memset(&gray, 0, sizeof(gray));
@@ -845,29 +957,7 @@ void down2(std::vector<Image>& img)
         else
           full_transp = 1;
 
-        if (colors <= 256)
-        {
-          int found = 0;
-          for (k=0; k<colors; k++)
-          if (col[k].r == r && col[k].g == g && col[k].b == b && col[k].a == a)
-          {
-            found = 1;
-            col[k].num++;
-            break;
-          }
-          if (found == 0)
-          {
-            if (colors < 256)
-            {
-              col[colors].num++;
-              col[colors].r = r;
-              col[colors].g = g;
-              col[colors].b = b;
-              col[colors].a = a;
-            }
-            colors++;
-          }
-        }
+        count_color(cmap, col, colors, last_key, last_idx, r, g, b, a);
       }
     }
   }
@@ -901,6 +991,9 @@ void down2(std::vector<Image>& img)
           }
         }
       }
+      /* replace the old RGB tRNS; if no free gray level was found the image
+         must not keep the 6-byte RGB tRNS (invalid for grayscale) */
+      image->ts = 0;
       if (ts > 0)
       {
         image->tr[0] = 0;
@@ -917,6 +1010,8 @@ void down2(std::vector<Image>& img)
         col[colors++].a = 0;
 
       qsort(&col[0], colors, sizeof(COLORS), cmp_colors);
+      ColorMap imap;
+      build_index_map(imap, col, colors);
 
       for (i=0; i<img.size(); i++)
       {
@@ -929,15 +1024,13 @@ void down2(std::vector<Image>& img)
             g = *sp++;
             b = *sp++;
             a = (image->ts > 0 && image->tr[1] == r && image->tr[3] == g && image->tr[5] == b) ? 0 : 255;
-            for (k=0; k<colors; k++)
-              if (col[k].r == r && col[k].g == g && col[k].b == b && col[k].a == a)
-                break;
-            *dp++ = k;
+            *dp++ = lookup_index(imap, colors, r, g, b, a);
           }
         }
       }
 
       image->ps = colors;
+      image->ts = 0; /* recomputed below; drop any stale RGB tRNS length */
       for (i=0; i<colors; i++)
       {
         image->pl[i].r = col[i].r;
@@ -953,7 +1046,7 @@ void down2(std::vector<Image>& img)
 
 void down4(std::vector<Image>& img)
 {
-  unsigned int i, k, x, y;
+  unsigned int i, x, y;
   unsigned char * sp;
   unsigned char * dp;
   unsigned char g, a;
@@ -962,6 +1055,9 @@ void down4(std::vector<Image>& img)
   unsigned char gray[256];
   COLORS col[256];
   unsigned int colors = 0;
+  ColorMap cmap;
+  unsigned int last_key = 0;
+  int last_idx = -1;
   Image * image = &img[0];
 
   memset(&gray, 0, sizeof(gray));
@@ -993,29 +1089,7 @@ void down4(std::vector<Image>& img)
         else
           full_transp = 1;
 
-        if (colors <= 256)
-        {
-          int found = 0;
-          for (k=0; k<colors; k++)
-          if (col[k].g == g && col[k].a == a)
-          {
-            found = 1;
-            col[k].num++;
-            break;
-          }
-          if (found == 0)
-          {
-            if (colors < 256)
-            {
-              col[colors].num++;
-              col[colors].r = g;
-              col[colors].g = g;
-              col[colors].b = g;
-              col[colors].a = a;
-            }
-            colors++;
-          }
-        }
+        count_color(cmap, col, colors, last_key, last_idx, g, g, g, a);
       }
     }
   }
@@ -1057,6 +1131,8 @@ void down4(std::vector<Image>& img)
       col[colors++].a = 0;
 
     qsort(&col[0], colors, sizeof(COLORS), cmp_colors);
+      ColorMap imap;
+      build_index_map(imap, col, colors);
 
     for (i=0; i<img.size(); i++)
     {
@@ -1067,15 +1143,13 @@ void down4(std::vector<Image>& img)
         {
           g = *sp++;
           a = *sp++;
-          for (k=0; k<colors; k++)
-            if (col[k].g == g && col[k].a == a)
-              break;
-          *dp++ = k;
+          *dp++ = lookup_index(imap, colors, g, g, g, a);
         }
       }
     }
 
     image->ps = colors;
+      image->ts = 0; /* recomputed below; drop any stale RGB tRNS length */
     for (i=0; i<colors; i++)
     {
       image->pl[i].r = col[i].r;
@@ -1259,6 +1333,20 @@ void optim_palette(std::vector<Image>& img)
 
   qsort(&col[0], 256, sizeof(COLORS), cmp_colors);
 
+  unsigned char remap[256];
+  for (c = 0; c < 256; c++)
+  {
+    r = image->pl[c].r;
+    g = image->pl[c].g;
+    b = image->pl[c].b;
+    a = image->tr[c];
+    int k;
+    for (k = 0; k < 256; k++)
+      if (col[k].r == r && col[k].g == g && col[k].b == b && col[k].a == a)
+        break;
+    remap[c] = (unsigned char)k;
+  }
+
   for (i=0; i<img.size(); i++)
   {
     for (y=0; y<image->h; y++)
@@ -1266,14 +1354,8 @@ void optim_palette(std::vector<Image>& img)
       sp = img[i].rows[y];
       for (x=0; x<image->w; x++)
       {
-        r = image->pl[*sp].r;
-        g = image->pl[*sp].g;
-        b = image->pl[*sp].b;
-        a = image->tr[*sp];
-        for (c=0; c<image->ps; c++)
-          if (col[c].r == r && col[c].g == g && col[c].b == b && col[c].a == a)
-            break;
-        *sp++ = c;
+        *sp = remap[*sp];
+        sp++;
       }
     }
   }

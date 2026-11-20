@@ -2,7 +2,7 @@ PACKAGE    = apngasm
 CC         = gcc
 SRC_DIRS   = . 7z zopfli
 CFLAGS     = -Wall -pedantic -DFEATURE_7ZIP -DFEATURE_ZOPFLI
-CFLAGS_OPT = -O2
+CFLAGS_OPT = -O3 -fomit-frame-pointer
 CFLAGS_7Z  = -Wno-sign-compare -Wno-reorder -Wno-maybe-uninitialized -Wno-parentheses
 LIBS       = -lstdc++ -lm -lpng -lz
 
