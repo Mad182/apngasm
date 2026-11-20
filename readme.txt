@@ -135,8 +135,56 @@ file ## : (multiple input files) delay of that frame in ms
 Options must start with '-' (the '/' prefix of the Windows version is not
 supported, since it clashes with absolute paths).
 
-Building (Linux): requires libpng and zlib development packages, then
-  make
+--------------------------------
+
+Building on Debian / Ubuntu
+
+Tested on Debian 12 (bookworm) and Debian 13 (trixie). The same steps work
+on Ubuntu and other Debian based distributions.
+
+1. Install the compiler and the libpng/zlib development packages:
+
+   sudo apt update
+   sudo apt install build-essential git libpng-dev zlib1g-dev
+
+   (build-essential provides gcc, g++ and make; the 7zip and Zopfli
+   compressors are included in the source tree, nothing else is needed)
+
+2. Get the source:
+
+   git clone https://github.com/Mad182/apngasm.git
+   cd apngasm
+
+3. Compile:
+
+   make -j"$(nproc)"
+
+   This creates the "apngasm" binary in the current directory. Compiler
+   warnings coming from the bundled 7z/ and zopfli/ code are harmless.
+
+4. Install (optional), to /usr/local/bin by default:
+
+   sudo make install
+
+   Other locations: "make install PREFIX=$HOME/.local" (no sudo needed)
+   or "make install DESTDIR=/tmp/pkg" for packaging.
+   Remove with "sudo make uninstall" (use the same PREFIX).
+
+5. Check that it works:
+
+   apngasm
+
+   prints "APNG Assembler 2.91-ezgif" followed by the usage text.
+
+Build options:
+- "make clean" removes the binary and object files.
+- Optimization flags are set by CFLAGS_OPT in the Makefile (default
+  -O3 -fomit-frame-pointer), e.g. "make CFLAGS_OPT=-O2".
+  "-march=native" may make it slightly faster, but the binary will
+  then only run on CPUs with the same instruction set as the build
+  machine, so don't use it for binaries you copy to other servers.
+- The libpng/ and zlib/ directories are only used by the Windows
+  project files; the Linux build links the system libpng and zlib.
 
 ================================================================
 
